@@ -6,24 +6,25 @@ import os
 
 print("Starting script...")
 
-# Load environment variables from .env
+# Load environment variables from .env file
 load_dotenv()
 
+#to controll the Open-Smart RGB LED Strip Driver Module
 class RGBDriver:
     def __init__(self, clk_pin, data_pin):
         self.clk_pin = clk_pin
         self.data_pin = data_pin
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(self.data_pin, GPIO.OUT)
-        GPIO.setup(self.clk_pin, GPIO.OUT)
-        GPIO.output(self.data_pin, GPIO.LOW)
-        GPIO.output(self.clk_pin, GPIO.LOW)
+        GPIO.setmode(GPIO.BCM)  # Set GPIO mode to BCM
+        GPIO.setup(self.data_pin, GPIO.OUT)  # Set data pin as output
+        GPIO.setup(self.clk_pin, GPIO.OUT)  # Set clock pin as output
+        GPIO.output(self.data_pin, GPIO.LOW)  # Initialize data pin to LOW
+        GPIO.output(self.clk_pin, GPIO.LOW)  # Initialize clock pin to LOW
 
     def begin(self):
-        self.send_32_zero()
+        self.send_32_zero()  # Send 32 zero bits to start the transmission
 
     def end(self):
-        self.send_32_zero()
+        self.send_32_zero()  # Send 32 zero bits to end the transmission
 
     def clk_rise(self):
         GPIO.output(self.clk_pin, GPIO.LOW)
@@ -34,7 +35,7 @@ class RGBDriver:
     def send_32_zero(self):
         for _ in range(32):
             GPIO.output(self.data_pin, GPIO.LOW)
-            self.clk_rise()
+            self.clk_rise()  # Raise the clock signal
 
     def take_anti_code(self, data):
         tmp = 0
@@ -48,7 +49,7 @@ class RGBDriver:
         for i in range(32):
             GPIO.output(self.data_pin, GPIO.HIGH if (dx & 0x80000000) else GPIO.LOW)
             dx <<= 1
-            self.clk_rise()
+            self.clk_rise()  # Raise the clock signal
 
     def set_color(self, red, green, blue):
         dx = 0
@@ -60,54 +61,44 @@ class RGBDriver:
         dx |= (green << 8)
         dx |= red
         self.begin()  # Initialize transmission
-        self.dat_send(dx)
+        self.dat_send(dx)  # Send data
         self.end()    # End transmission
         print(f"Color set: R:{red}, G:{green}, B:{blue}")
 
-# MQTT Configuration using env vars
+# MQTT Configuration using environment variables
+# variables retrieved from .env file
 MQTT_BROKER = os.getenv("MQTT_BROKER")
 MQTT_PORT = int(os.getenv("MQTT_PORT"))
 MQTT_TOPIC_COLOR = os.getenv("MQTT_TOPIC_COLOR")
-MQTT_TOPIC_FAN = os.getenv("MQTT_TOPIC_FAN")
 MQTT_USER = os.getenv("MQTT_USER")
 MQTT_PASS = os.getenv("MQTT_PASS")
 
-# Hardware Setup
+# Hardware pins on pi
 clk_pin = 17  # BCM 17 (Physical Pin 11)
 data_pin = 18  # BCM 18 (Physical Pin 12)
-fan_pin = 14   # BCM 14 (Physical Pin 8)
 
 driver = RGBDriver(clk_pin, data_pin)
-GPIO.setup(fan_pin, GPIO.OUT)
-GPIO.output(fan_pin, GPIO.LOW)
 
 # MQTT Callbacks
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("Connected to MQTT Broker!")
         client.subscribe(MQTT_TOPIC_COLOR)
-        client.subscribe(MQTT_TOPIC_FAN)
     else:
-        print(f"Connection failed with code {rc}")
+        print(f"Connection failed with code: {rc}")
 
 def on_message(client, userdata, message):
     payload = message.payload.decode()
     print(f"Received on {message.topic}: {payload}")
-    
+
+# If the message is in the color topic send the R, G, B values to driver
     if message.topic == MQTT_TOPIC_COLOR:
         try:
             r, g, b = map(int, payload.split(','))
             driver.set_color(r, g, b)  # begin/end already handled in set_color()
         except ValueError:
             print(f"Invalid color format: {payload}")
-    
-    elif message.topic == MQTT_TOPIC_FAN:
-        if payload.lower() == "on":
-            GPIO.output(fan_pin, GPIO.HIGH)
-            print("Fan ON")
-        elif payload.lower() == "off":
-            GPIO.output(fan_pin, GPIO.LOW)
-            print("Fan OFF")
+
 
 # Start MQTT Client
 client = mqtt.Client()
