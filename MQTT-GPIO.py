@@ -3,6 +3,7 @@ import RPi.GPIO as GPIO
 import time
 from dotenv import load_dotenv
 import os
+import json
 
 print("Starting script...")
 
@@ -65,13 +66,15 @@ class RGBDriver:
         self.end()    # End transmission
         print(f"Color set: R:{red}, G:{green}, B:{blue}")
 
-# MQTT Configuration using environment variables
-# variables retrieved from .env file
+# MQTT Configuration
 MQTT_BROKER = os.getenv("MQTT_BROKER")
 MQTT_PORT = int(os.getenv("MQTT_PORT"))
 MQTT_TOPIC_COLOR = os.getenv("MQTT_TOPIC_COLOR")
+MQTT_TOPIC_DISCOVERY = os.getenv("MQTT_TOPIC_DISCOVERY")
 MQTT_USER = os.getenv("MQTT_USER")
 MQTT_PASS = os.getenv("MQTT_PASS")
+DEVICE_ID = os.getenv("DEVICE_ID")
+DEVICE_NAME = os.getenv("DEVICE_NAME")
 
 # Hardware pins on pi
 clk_pin = 17  # BCM 17 (Physical Pin 11)
@@ -82,34 +85,52 @@ driver = RGBDriver(clk_pin, data_pin)
 # MQTT Callbacks
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
-        print("Connected to MQTT Broker!")
+        print("Connected to MQTT Broker!") #initial connection
+        # Autodiscovery payload
+        config_payload = {
+            "name": DEVICE_NAME,
+            "unique_id": DEVICE_ID,
+            "command_topic": MQTT_TOPIC_COLOR,
+            "rgb_command_topic": MQTT_TOPIC_COLOR,
+            "schema": "json",
+            "brightness": False,
+            "device": {
+                "identifiers": [DEVICE_ID],
+                "name": DEVICE_NAME,
+                "manufacturer": "Open-Smart"
+            }
+        }
+        client.publish(MQTT_TOPIC_DISCOVERY, json.dumps(config_payload), retain=True)
         client.subscribe(MQTT_TOPIC_COLOR)
     else:
-        print(f"Connection failed with code: {rc}")
+        print(f"Connection failed: {rc}")
 
 def on_message(client, userdata, message):
-    payload = message.payload.decode()
-    print(f"Received on {message.topic}: {payload}")
-
-# If the message is in the color topic send the R, G, B values to driver
-    if message.topic == MQTT_TOPIC_COLOR:
+    try:
+        payload = json.loads(message.payload)
+        r = payload.get("r", payload.get("red", 0))
+        g = payload.get("g", payload.get("green", 0))
+        b = payload.get("b", payload.get("blue", 0))
+        driver.set_color(r, g, b)
+    except json.JSONDecodeError:
+        # Fallback to comma-separated format
         try:
-            r, g, b = map(int, payload.split(','))
-            driver.set_color(r, g, b)  # begin/end already handled in set_color()
-        except ValueError:
-            print(f"Invalid color format: {payload}")
+            r, g, b = map(int, message.payload.decode().split(','))
+            driver.set_color(r, g, b)
+        except:
+            print(f"Invalid payload: {message.payload}")
 
-
-# Start MQTT Client
-client = mqtt.Client()
+# Initialize MQTT client
+client = mqtt.Client(client_id=f"rgb_driver_{DEVICE_ID}")  # Unique client ID
 client.username_pw_set(MQTT_USER, MQTT_PASS)
 client.on_connect = on_connect
 client.on_message = on_message
 
-client.connect(MQTT_BROKER, MQTT_PORT, 60)
-client.loop_start()
+client.will_set(MQTT_TOPIC_DISCOVERY, payload=None, qos=0, retain=True)  # Cleanup on disconnect
 
 try:
+    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    client.loop_start()
     print("RGB driver ready. Waiting for commands...")
     while True:
         time.sleep(1)
