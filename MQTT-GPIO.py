@@ -70,6 +70,8 @@ class RGBDriver:
 MQTT_BROKER = os.getenv("MQTT_BROKER")
 MQTT_PORT = int(os.getenv("MQTT_PORT"))
 MQTT_TOPIC_COLOR = os.getenv("MQTT_TOPIC_COLOR")
+MQTT_TOPIC_STATE = os.getenv("MQTT_TOPIC_STATE", "home/rgb_strip/state")
+MQTT_TOPIC_COMMAND = os.getenv("MQTT_TOPIC_COMMAND", "home/rgb_strip/command")
 MQTT_TOPIC_DISCOVERY = os.getenv("MQTT_TOPIC_DISCOVERY")
 MQTT_USER = os.getenv("MQTT_USER")
 MQTT_PASS = os.getenv("MQTT_PASS")
@@ -82,18 +84,38 @@ data_pin = 18  # BCM 18 (Physical Pin 12)
 
 driver = RGBDriver(clk_pin, data_pin)
 
-# MQTT Callbacks
+# State tracking
+current_state = "OFF"
+current_color = (0, 0, 0)
+
+def update_state(new_state, color=None):
+    global current_state, current_color
+    current_state = new_state
+    if color:
+        current_color = color
+    client.publish(MQTT_TOPIC_STATE, json.dumps({
+        "state": current_state,
+        "color": {
+            "r": current_color[0],
+            "g": current_color[1],
+            "b": current_color[2]
+        }
+    }), retain=True)
+
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
-        print("Connected to MQTT Broker!") #initial connection
-        # Autodiscovery payload
+        print("Connected to MQTT Broker!")
         config_payload = {
             "name": DEVICE_NAME,
             "unique_id": DEVICE_ID,
-            "command_topic": MQTT_TOPIC_COLOR,
+            "command_topic": MQTT_TOPIC_COMMAND,
             "rgb_command_topic": MQTT_TOPIC_COLOR,
+            "state_topic": MQTT_TOPIC_STATE,
             "schema": "json",
             "brightness": False,
+            "optimistic": False,
+            "payload_on": "ON",
+            "payload_off": "OFF",
             "device": {
                 "identifiers": [DEVICE_ID],
                 "name": DEVICE_NAME,
@@ -101,32 +123,51 @@ def on_connect(client, userdata, flags, rc):
             }
         }
         client.publish(MQTT_TOPIC_DISCOVERY, json.dumps(config_payload), retain=True)
+        client.subscribe(MQTT_TOPIC_COMMAND)
         client.subscribe(MQTT_TOPIC_COLOR)
-    else:
-        print(f"Connection failed: {rc}")
+        update_state("OFF")  # Initial state
 
-def on_message(client, userdata, message):
+def on_message(client, userdata, msg):
+    if msg.topic == MQTT_TOPIC_COMMAND:
+        handle_power_command(msg.payload.decode())
+    elif msg.topic == MQTT_TOPIC_COLOR:
+        handle_color_command(msg.payload)
+
+def handle_power_command(payload):
+    if payload == "ON":
+        driver.set_color(*current_color)
+        update_state("ON")
+    elif payload == "OFF":
+        driver.set_color(0, 0, 0)
+        update_state("OFF")
+
+def handle_color_command(payload):
     try:
-        payload = json.loads(message.payload)
-        r = payload.get("r", payload.get("red", 0))
-        g = payload.get("g", payload.get("green", 0))
-        b = payload.get("b", payload.get("blue", 0))
+        color_data = json.loads(payload)
+        r = max(0, min(255, color_data.get("r", color_data.get("red", 0))))
+        g = max(0, min(255, color_data.get("g", color_data.get("green", 0))))
+        b = max(0, min(255, color_data.get("b", color_data.get("blue", 0))))
+        
         driver.set_color(r, g, b)
+        if current_state == "OFF":
+            update_state("ON", (r, g, b))
+        else:
+            update_state(current_state, (r, g, b))
     except json.JSONDecodeError:
-        # Fallback to comma-separated format
         try:
-            r, g, b = map(int, message.payload.decode().split(','))
+            parts = list(map(int, payload.decode().split(',')))
+            r = max(0, min(255, parts[0]))
+            g = max(0, min(255, parts[1]))
+            b = max(0, min(255, parts[2]))
             driver.set_color(r, g, b)
+            update_state("ON", (r, g, b))
         except:
-            print(f"Invalid payload: {message.payload}")
+            print(f"Invalid color payload: {payload}")
 
-# Initialize MQTT client
-client = mqtt.Client(client_id=f"rgb_driver_{DEVICE_ID}")  # Unique client ID
+client = mqtt.Client(client_id=f"rgb_driver_{DEVICE_ID}")
 client.username_pw_set(MQTT_USER, MQTT_PASS)
 client.on_connect = on_connect
 client.on_message = on_message
-
-client.will_set(MQTT_TOPIC_DISCOVERY, payload=None, qos=0, retain=True)  # Cleanup on disconnect
 
 try:
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
