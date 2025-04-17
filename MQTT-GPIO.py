@@ -1,43 +1,59 @@
 import paho.mqtt.client as mqtt
 import RPi.GPIO as GPIO
 import time
+import logging
 from dotenv import load_dotenv
 import os
 
-print("Starting script...")
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Load environment variables from .env file
 load_dotenv()
 
-#to controll the Open-Smart RGB LED Strip Driver Module
 class RGBDriver:
+    """
+    A class to control the Open-Smart RGB LED Strip Driver Module.
+    """
     def __init__(self, clk_pin, data_pin):
         self.clk_pin = clk_pin
         self.data_pin = data_pin
-        GPIO.setmode(GPIO.BCM)  # Set GPIO mode to BCM
-        GPIO.setup(self.data_pin, GPIO.OUT)  # Set data pin as output
-        GPIO.setup(self.clk_pin, GPIO.OUT)  # Set clock pin as output
-        GPIO.output(self.data_pin, GPIO.LOW)  # Initialize data pin to LOW
-        GPIO.output(self.clk_pin, GPIO.LOW)  # Initialize clock pin to LOW
+        try:
+            GPIO.setmode(GPIO.BCM)  # Set GPIO mode to BCM
+            GPIO.setup(self.data_pin, GPIO.OUT)  # Set data pin as output
+            GPIO.setup(self.clk_pin, GPIO.OUT)  # Set clock pin as output
+            GPIO.output(self.data_pin, GPIO.LOW)  # Initialize data pin to LOW
+            GPIO.output(self.clk_pin, GPIO.LOW)  # Initialize clock pin to LOW
+            logging.info("GPIO pins initialized successfully.")
+        except Exception as e:
+            logging.error(f"Failed to initialize GPIO pins: {e}")
 
     def begin(self):
-        self.send_32_zero()  # Send 32 zero bits to start the transmission
+        """Initialize transmission by sending 32 zero bits."""
+        self.send_32_zero()
 
     def end(self):
-        self.send_32_zero()  # Send 32 zero bits to end the transmission
+        """End transmission by sending 32 zero bits."""
+        self.send_32_zero()
 
     def clk_rise(self):
-        GPIO.output(self.clk_pin, GPIO.LOW)
-        time.sleep(0.00002)  # 20µs delay
-        GPIO.output(self.clk_pin, GPIO.HIGH)
-        time.sleep(0.00002)  # 20µs delay
+        """Generate a clock pulse."""
+        try:
+            GPIO.output(self.clk_pin, GPIO.LOW)
+            time.sleep(0.00002)  # 20µs delay
+            GPIO.output(self.clk_pin, GPIO.HIGH)
+            time.sleep(0.00002)  # 20µs delay
+        except Exception as e:
+            logging.error(f"Failed to generate clock pulse: {e}")
 
     def send_32_zero(self):
+        """Send 32 zero bits."""
         for _ in range(32):
             GPIO.output(self.data_pin, GPIO.LOW)
             self.clk_rise()  # Raise the clock signal
 
     def take_anti_code(self, data):
+        """Calculate the anti-code for the given data."""
         tmp = 0
         if (data & 0x80) == 0:  # Check bit 7
             tmp |= 0x02
@@ -46,12 +62,14 @@ class RGBDriver:
         return tmp
 
     def dat_send(self, dx):
+        """Send data to the LED strip."""
         for i in range(32):
             GPIO.output(self.data_pin, GPIO.HIGH if (dx & 0x80000000) else GPIO.LOW)
             dx <<= 1
             self.clk_rise()  # Raise the clock signal
 
     def set_color(self, red, green, blue):
+        """Set the color of the LED strip."""
         dx = 0
         dx |= (0x03 << 30)
         dx |= (self.take_anti_code(blue) << 28)
@@ -63,10 +81,9 @@ class RGBDriver:
         self.begin()  # Initialize transmission
         self.dat_send(dx)  # Send data
         self.end()    # End transmission
-        print(f"Color set: R:{red}, G:{green}, B:{blue}")
+        logging.info(f"Color set: R:{red}, G:{green}, B:{blue}")
 
 # MQTT Configuration using environment variables
-# variables retrieved from .env file
 MQTT_BROKER = os.getenv("MQTT_BROKER")
 MQTT_PORT = int(os.getenv("MQTT_PORT"))
 MQTT_TOPIC_COLOR = os.getenv("MQTT_TOPIC_COLOR")
@@ -81,24 +98,24 @@ driver = RGBDriver(clk_pin, data_pin)
 
 # MQTT Callbacks
 def on_connect(client, userdata, flags, rc):
+    """Callback when the client connects to the MQTT broker."""
     if rc == 0:
-        print("Connected to MQTT Broker!")
+        logging.info("Connected to MQTT Broker!")
         client.subscribe(MQTT_TOPIC_COLOR)
     else:
-        print(f"Connection failed with code: {rc}")
+        logging.error(f"Connection failed with code: {rc}")
 
 def on_message(client, userdata, message):
+    """Callback when a message is received from the MQTT broker."""
     payload = message.payload.decode()
-    print(f"Received on {message.topic}: {payload}")
+    logging.info(f"Received on {message.topic}: {payload}")
 
-# If the message is in the color topic send the R, G, B values to driver
     if message.topic == MQTT_TOPIC_COLOR:
         try:
             r, g, b = map(int, payload.split(','))
             driver.set_color(r, g, b)  # begin/end already handled in set_color()
         except ValueError:
-            print(f"Invalid color format: {payload}")
-
+            logging.error(f"Invalid color format: {payload}")
 
 # Start MQTT Client
 client = mqtt.Client()
@@ -106,15 +123,16 @@ client.username_pw_set(MQTT_USER, MQTT_PASS)
 client.on_connect = on_connect
 client.on_message = on_message
 
-client.connect(MQTT_BROKER, MQTT_PORT, 60)
-client.loop_start()
-
 try:
-    print("RGB driver ready. Waiting for commands...")
+    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    client.loop_start()
+    logging.info("RGB driver ready. Waiting for commands...")
     while True:
         time.sleep(1)
-except KeyboardInterrupt:
-    print("Shutting down...")
+except Exception as e:
+    logging.error(f"MQTT connection error: {e}")
+finally:
+    logging.info("Shutting down...")
     driver.end()
     GPIO.cleanup()
     client.loop_stop()
