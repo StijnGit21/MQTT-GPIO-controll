@@ -1,0 +1,9 @@
+{
+    "name": "RGB LED Strip",
+    "command_topic": "{{MQTT_TOPIC_COLOR}}",
+    "rgb": true,
+    "payload_on": "ON",
+    "payload_off": "OFF",
+    "optimistic": false,
+    "qos": 0
+}

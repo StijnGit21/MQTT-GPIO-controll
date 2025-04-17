@@ -2,8 +2,9 @@ import paho.mqtt.client as mqtt
 import RPi.GPIO as GPIO
 import time
 import logging
-from dotenv import load_dotenv
+import json
 import os
+from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -90,6 +91,20 @@ MQTT_TOPIC_COLOR = os.getenv("MQTT_TOPIC_COLOR")
 MQTT_USER = os.getenv("MQTT_USER")
 MQTT_PASS = os.getenv("MQTT_PASS")
 
+# Home Assistant auto-discovery configuration
+HA_DISCOVERY_TOPIC = "homeassistant/light/rgb_led_strip/config"
+
+# Load the discovery template from the JSON file
+with open('config/ha_discovery_template.json', 'r') as file:
+    ha_discovery_template = json.load(file)
+
+# Replace placeholders with actual values
+ha_discovery_template['command_topic'] = MQTT_TOPIC_COLOR
+
+# Load MQTT messages from the JSON file
+with open('config/mqtt_messages.json', 'r') as file:
+    mqtt_messages = json.load(file)
+
 # Hardware pins on pi
 clk_pin = 17  # BCM 17 (Physical Pin 11)
 data_pin = 18  # BCM 18 (Physical Pin 12)
@@ -102,6 +117,8 @@ def on_connect(client, userdata, flags, rc):
     if rc == 0:
         logging.info("Connected to MQTT Broker!")
         client.subscribe(MQTT_TOPIC_COLOR)
+        # Publish Home Assistant discovery message
+        client.publish(HA_DISCOVERY_TOPIC, json.dumps(ha_discovery_template), retain=True)
     else:
         logging.error(f"Connection failed with code: {rc}")
 
@@ -116,6 +133,13 @@ def on_message(client, userdata, message):
             driver.set_color(r, g, b)  # begin/end already handled in set_color()
         except ValueError:
             logging.error(f"Invalid color format: {payload}")
+
+def publish_color_command(client, red, green, blue):
+    """Publish a color command using the template from the JSON file."""
+    message_template = mqtt_messages['color_command']
+    topic = message_template['topic']
+    payload = message_template['payload'].replace("{{r}}", str(red)).replace("{{g}}", str(green)).replace("{{b}}", str(blue))
+    client.publish(topic, payload)
 
 # Start MQTT Client
 client = mqtt.Client()

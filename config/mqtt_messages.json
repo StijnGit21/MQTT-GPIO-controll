@@ -1,0 +1,14 @@
+{
+    "color_command": {
+        "topic": "{{MQTT_TOPIC_COLOR}}",
+        "payload": "{{r}},{{g}},{{b}}"
+    },
+    "status_on": {
+        "topic": "{{MQTT_TOPIC_COLOR}}",
+        "payload": "ON"
+    },
+    "status_off": {
+        "topic": "{{MQTT_TOPIC_COLOR}}",
+        "payload": "OFF"
+    }
+}
