@@ -100,6 +100,8 @@ with open('config/ha_discovery_template.json', 'r') as file:
 
 # Replace placeholders with actual values
 ha_discovery_template['command_topic'] = MQTT_TOPIC_COLOR
+#ha_discovery_template['state_topic'] = MQTT_TOPIC_STATE  # Add this line if you have a state topic
+
 
 # Load MQTT messages from the JSON file
 with open('config/mqtt_messages.json', 'r') as file:
